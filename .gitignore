@@ -1,0 +1,17 @@
+.Rproj.user
+.Rhistory
+.RData
+.httr-oauth
+.DS_Store
+.quarto
+*.mtx
+*.rds
+*.RData
+.RData*
+.RDataTmp*
+*.tsv
+*.h5
+*.h5ad
+*.loom
+Outputs/
+data/
