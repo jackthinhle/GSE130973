@@ -208,10 +208,13 @@ myeloids <- RunPCA(myeloids, npcs = 30)
 ## Check how many PCs actually capture variance in this subset — 
 # with fewer cells and less heterogeneity you often need fewer PCs than the full dataset
 ElbowPlot(myeloids)
+library(harmony)
+myeloids<-RunHarmony(myeloids, group.by.vars = "sampleid", reduction.use = "pca",
+                     reduction.save = "harmony")
 ## 5. Neighbors, clustering, UMAP — using harmony embedding if you ran it
-myeloids <- FindNeighbors(myeloids, dims = 1:10)
+myeloids <- FindNeighbors(myeloids, dims = 1:10, reduction = "harmony")
 myeloids <- FindClusters(myeloids, resolution = 0.3)
-myeloids <- RunUMAP(myeloids, dims = 1:10)
+myeloids <- RunUMAP(myeloids, dims = 1:10, reduction = "harmony")
 ## 6. Visualize
 DimPlot(myeloids, label = TRUE)
 Idents(myeloids)="seurat_clusters"
@@ -220,8 +223,6 @@ myeloids_top10 <- myeloids_markers %>%
   group_by(cluster) %>%
   slice_max(order_by = avg_log2FC, n = 10)
 DoHeatmap(myeloids,features = myeloids_top10$gene)
-#Save
-write.csv(myeloids_markers, "/Users/lequanthinh/Desktop/GSE130973/Outputs/myeloids_markers.csv")
 #Subtype of myeloids
 ##SingleR automatic annotation using published dataset
 library(SingleR)
@@ -235,18 +236,37 @@ expr<-as.SingleCellExperiment(myeloids)
 colLabels(expr) <- myeloids$seurat_clusters
 predictions<-SingleR(test = expr, ref = ref, labels = ref$reclustered.fine,clusters = colLabels(expr))
 cl <- as.character(colLabels(expr))
-myeloids$SingleR_type <- predictions$labels[match(cl, rownames(predictions))]
-Idents(myeloids) <- "SingleR_type"
-DimPlot(myeloids, reduction = "umap", group.by = "SingleR_type", label = TRUE, repel = TRUE)
+myeloids$singler_type <- predictions$labels[match(cl, rownames(predictions))]
+Idents(myeloids) <- "singler_type"
+DimPlot(myeloids, reduction = "umap", group.by = "singler_type", label = TRUE, repel = TRUE)
+singler_markers<-FindAllMarkers(myeloids,only.pos = TRUE,min.pct = 0.25,logfc.threshold = 0.25)
+#DEGs aging genes on myeloids subsets
+subset <- levels(myeloids)
+aging_by_subset <- list()
+for (st in subset) {
+  cells <- subset(myeloids, idents = st)
+  if(length(unique(cells$age)) < 2) next
+  Idents(cells) <- "age"
+  deg <- FindMarkers(
+    cells,
+    ident.1 = "OLD",
+    ident.2 = "YOUNG")
+  deg$subset <- st
+  aging_by_subset[[st]] <- deg
+}
+aging_subset_results <- do.call(rbind, aging_by_subset)
+#Save
+write.csv(myeloids_markers, "/Users/lequanthinh/Desktop/GSE130973/Outputs/myeloids_clusters.csv")
+write.csv(aging_subset_results, "/Users/lequanthinh/Desktop/GSE130973/Outputs/myeloids_subset.csv")
 ##Heatmap of myeloid markers
 myeloid_order <- c("cDC1", "cDC2", "Langerhans")
-myeloid_type_markers <- c("ITGAX","CPVL","CLEC9A","WDFY4","XCR1","CLEC10A","CD1C","CD207","CD1A","FCER1A")
-Idents(myeloids) <- factor(myeloids$SingleR_type, levels = myeloid_order)
+myeloid_type_markers <- c("CPVL","CLEC9A","WDFY4","XCR1","CLEC10A","CD1C","CD1A","FCER1A","CD207","EPCAM")
+Idents(myeloids) <- factor(myeloids$singler_type, levels = myeloid_order)
 myeloid_avg <- AverageExpression(myeloids, features = myeloid_type_markers,
                                  group.by = "ident", slot = "data")$RNA
+myeloid_avg <- myeloid_avg[myeloid_type_markers, , drop = FALSE]
 myeloid_mat <- t(scale(t(as.matrix(myeloid_avg))))
 colnames(myeloid_mat) <- sub("^g", "", colnames(myeloid_mat))
-myeloid_mat <- myeloid_mat[, myeloid_order, drop = FALSE]
 myeloid_mat <- myeloid_mat[, colSums(!is.na(myeloid_mat)) > 0, drop = FALSE]
 col_fun <- colorRamp2(c(min(myeloid_mat, na.rm = TRUE), 0, max(myeloid_mat, na.rm = TRUE)),
                       c("#2166AC", "white", "#B2182B"))
@@ -254,7 +274,7 @@ Heatmap(myeloid_mat,
         name = "Scaled\nexpression",
         col = col_fun,
         cluster_rows = FALSE, cluster_columns = FALSE,
-        column_title = "myeloid marker expression by cluster",
+        column_title = "myeloid marker expression",
         row_names_gp = gpar(fontsize = 10),
         rect_gp = gpar(col = "white", lwd = 0.5))
 #---------------------------------------------------------------------------------------------------
