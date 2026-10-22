@@ -55,7 +55,7 @@ marker_list <- list(
   Pericytes                = c("ACTA2", "RGS5", "PDGFRB"),
   Epidermal_stem_cells     = c("KRT5", "KRT14", "TP63", "ITGB1", "ITGA6"),
   Differentiated_keratinocytes = c("KRT1", "KRT10", "SBSN", "KRTDAP"),
-  Fibroblasts               = c("PDGFRA", "LUM", "DCN", "VIM", "COL1A2"),
+  Fibroblasts               = c("PDGFRA", "LUM", "DCN", "COL1A2"),
   Myeloid_cells             = c("AIF1", "LYZ", "HLA-DRA", "CD68", "ITGAX"),
   T_cells                    = c("CD3D", "CD3G", "CD3E", "LCK"),
   Vascular_ECs               = c("SELE", "CLDN5", "VWF", "CDH5"),
@@ -152,44 +152,6 @@ for (ct in celltypes) {
   aging_by_celltype[[ct]] <- deg
 }
 aging_celltype_results <- do.call(rbind, aging_by_celltype)
-#Volcanic plot of DEG in young vs old
-## pick your cell type
-my_celltype <- "Myeloid_cells"   # replace with whatever cell type we want
-deg_subset <- aging_celltype_results %>%
-  filter(celltype == my_celltype) %>%
-  rownames_to_column("gene") %>%
-  mutate(gene = sub("\\.\\.\\.\\d+$", "", gene))  # strip rowname suffixes like "MERTK...123" if rbind added them
-## handle p_val_adj = 0
-min_nonzero_p <- min(deg_subset$p_val_adj[deg_subset$p_val_adj > 0], na.rm = TRUE)
-deg_subset$p_val_adj_plot <- ifelse(deg_subset$p_val_adj == 0, min_nonzero_p, deg_subset$p_val_adj)
-
-deg_subset <- deg_subset %>%
-  mutate(
-    neglog10p = -log10(p_val_adj_plot),
-    sig = case_when(
-      p_val_adj < 0.05 & avg_log2FC > 1  ~ "Up in OLD",
-      p_val_adj < 0.05 & avg_log2FC < -1 ~ "Up in YOUNG",
-      TRUE ~ "NS"
-    )
-  )
-top_genes <- deg_subset %>%
-  filter(sig != "NS") %>%
-  arrange(desc(abs(avg_log2FC))) %>%
-  slice_head(n = 8) %>%
-  pull(gene)
-deg_subset$label <- ifelse(deg_subset$gene %in% top_genes, deg_subset$gene, NA)
-ggplot(deg_subset, aes(x = avg_log2FC, y = neglog10p, color = sig)) +
-  geom_point(alpha = 0.6, size = 1.5) +
-  scale_color_manual(values = c("Up in OLD" = "firebrick",
-                                "Up in YOUNG" = "steelblue",
-                                "NS" = "grey70")) +
-  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey40") +
-  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "grey40") +
-  geom_label_repel(aes(label = label), size = 3, na.rm = TRUE, show.legend = FALSE,
-                   max.overlaps = 20) +
-  theme_bw() +
-  labs(title = paste("OLD vs YOUNG —", my_celltype),
-       x = "log2FC (OLD/YOUNG)", y = "-log10(adj p-value)")
 #Save results
 saveRDS(skin_mtx, "/Users/lequanthinh/Desktop/GSE130973/Outputs/skin_analysis_new.rds")
 write.csv(markers, "/Users/lequanthinh/Desktop/GSE130973/Outputs/cluster_markers.csv")
@@ -208,13 +170,10 @@ myeloids <- RunPCA(myeloids, npcs = 30)
 ## Check how many PCs actually capture variance in this subset — 
 # with fewer cells and less heterogeneity you often need fewer PCs than the full dataset
 ElbowPlot(myeloids)
-library(harmony)
-myeloids<-RunHarmony(myeloids, group.by.vars = "sampleid", reduction.use = "pca",
-                     reduction.save = "harmony")
 ## 5. Neighbors, clustering, UMAP — using harmony embedding if you ran it
-myeloids <- FindNeighbors(myeloids, dims = 1:10, reduction = "harmony")
-myeloids <- FindClusters(myeloids, resolution = 0.3)
-myeloids <- RunUMAP(myeloids, dims = 1:10, reduction = "harmony")
+myeloids <- FindNeighbors(myeloids, dims = 1:10)
+myeloids <- FindClusters(myeloids, resolution = 0.1)
+myeloids <- RunUMAP(myeloids, dims = 1:10)
 ## 6. Visualize
 DimPlot(myeloids, label = TRUE)
 Idents(myeloids)="seurat_clusters"
@@ -258,7 +217,7 @@ aging_subset_results <- do.call(rbind, aging_by_subset)
 #Save
 write.csv(myeloids_markers, "/Users/lequanthinh/Desktop/GSE130973/Outputs/myeloids_clusters.csv")
 write.csv(aging_subset_results, "/Users/lequanthinh/Desktop/GSE130973/Outputs/myeloids_subset.csv")
-##Heatmap of myeloid markers
+##Heatmap/dotplot of myeloid markers
 myeloid_order <- c("cDC1", "cDC2", "Langerhans")
 myeloid_type_markers <- c("CPVL","CLEC9A","WDFY4","XCR1","CLEC10A","CD1C","CD1A","FCER1A","CD207","EPCAM")
 Idents(myeloids) <- factor(myeloids$singler_type, levels = myeloid_order)
@@ -274,13 +233,82 @@ Heatmap(myeloid_mat,
         name = "Scaled\nexpression",
         col = col_fun,
         cluster_rows = FALSE, cluster_columns = FALSE,
-        column_title = "myeloid marker expression",
+        column_title = "myeloid marker",
         row_names_gp = gpar(fontsize = 10),
         rect_gp = gpar(col = "white", lwd = 0.5))
+DotPlot(myeloids, features = myeloid_type_markers, group.by = "singler_type",
+        scale = FALSE, cols = c("lightgrey", "#B2182B")) +
+  RotatedAxis()
+#Volcanic plot of DEG in young vs old
+## pick your cell type
+my_celltype <- "Myeloid_cells"   # replace with whatever cell type we want
+deg_subset <- aging_celltype_results %>%
+  filter(celltype == my_celltype) %>%
+  rownames_to_column("gene") %>%
+  mutate(gene = sub("\\.\\.\\.\\d+$", "", gene))  # strip rowname suffixes like "MERTK...123" if rbind added them
+## handle p_val_adj = 0
+min_nonzero_p <- min(deg_subset$p_val_adj[deg_subset$p_val_adj > 0], na.rm = TRUE)
+deg_subset$p_val_adj_plot <- ifelse(deg_subset$p_val_adj == 0, min_nonzero_p, deg_subset$p_val_adj)
+
+deg_subset <- deg_subset %>%
+  mutate(
+    neglog10p = -log10(p_val_adj_plot),
+    sig = case_when(
+      p_val_adj < 0.05 & avg_log2FC > 1  ~ "Up in OLD",
+      p_val_adj < 0.05 & avg_log2FC < -1 ~ "Up in YOUNG",
+      TRUE ~ "NS"
+    )
+  )
+deg_subset$gene <- sub(paste0("^", my_celltype, "\\."), "", deg_subset$gene)
+top_genes <- deg_subset %>%
+  filter(sig != "NS") %>%
+  arrange(desc(abs(avg_log2FC))) %>%
+  slice_head(n = 7) %>%
+  pull(gene)
+deg_subset$label <- ifelse(deg_subset$gene %in% top_genes, deg_subset$gene, NA)
+ggplot(deg_subset, aes(x = avg_log2FC, y = neglog10p, color = sig)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  scale_color_manual(values = c("Up in OLD" = "firebrick",
+                                "Up in YOUNG" = "steelblue",
+                                "NS" = "grey70")) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey40") +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "grey40") +
+  geom_label_repel(aes(label = label), size = 3, na.rm = TRUE, show.legend = FALSE,
+                   max.overlaps = 20) +
+  theme_bw() +
+  labs(title = paste("Different gene expression —", my_celltype),
+       x = "log2FC (OLD/YOUNG)", y = "-log10(adj p-value)")
+#Diverging bar chart
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ReactomePA)
+ids <- bitr(unique(deg_subset$gene), fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+entrez <- function(g) ids$ENTREZID[ids$SYMBOL %in% g]
+go <- function(sig_label, grp, sign) {
+  enrichPathway(entrez(deg_subset$gene[deg_subset$sig == sig_label]),
+                universe = entrez(deg_subset$gene), organism = "human") %>%
+    as.data.frame() %>%
+    slice_min(p.adjust, n = 7, with_ties = FALSE) %>%
+    transmute(group = grp, Term = str_wrap(Description, 35), x = sign * -log10(p.adjust))
+}
+df <- bind_rows(go("Up in YOUNG", "YOUNG",-1),
+                go("Up in OLD",   "OLD",1)) %>%
+  mutate(Term = fct_reorder(Term, x))
+ggplot(df, aes(x, Term, fill = group)) +
+  geom_col(color = "black", width = 0.75) +
+  geom_text(aes(x = -sign(x) * 0.03 * max(abs(x)), label = Term,
+                hjust = ifelse(x < 0, 0, 1)), size = 2.5, lineheight = 0.9) +
+  geom_vline(xintercept = 0) +
+  scale_fill_manual(values = c(YOUNG = "steelblue", OLD = "firebrick")) +
+  scale_x_continuous(labels = abs) +
+  labs(x = expression(-Log[10](P[adj])), y = NULL, title = paste("Young  <--  ", my_celltype, "  -->  Old")) +
+  theme_classic() +
+  theme(legend.position = "none", axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(), axis.line.y = element_blank())
 #---------------------------------------------------------------------------------------------------
 #Signatures check
 ##Plot cell-type specific signature score-----------------------------
-Efferocytosis_list<-c("NR1H3", "SIRPB1", "MERTK", "CEBPB", "CPT1C", "CPT1A", "CPT1B",
+Efferocytosis_list<-list(c("NR1H3", "SIRPB1", "MERTK", "CEBPB", "CPT1C", "CPT1A", "CPT1B",
                       "CREB1", "CRK", "CRKL", "MAPK14", "CX3CR1", "AGER", "DNMT3A", "DNMT3B", "DOCK1", "DUSP2",
                       "DUSP4", "DUSP5", "DUSP7", "DUSP8", "S1PR1", "ANO6", "ANO5", "EPO", "EPOR", "STAB1", "ATP11B", "ATP11A",
                       "VPS39", "VPS8", "SIRT1", "PLA2G15", "ALOX5", "ALOX15", "HAVCR1", "VPS41", "XKR6", "ATP11C", "GPR132",
@@ -292,42 +320,33 @@ Efferocytosis_list<-c("NR1H3", "SIRPB1", "MERTK", "CEBPB", "CPT1C", "CPT1A", "CP
                       "VPS16", "P2RY12", "VPS33A", "AD AM17", "TGFB1", "C1QB", "C1QC",
                       "TYRO3", "NR1H2", "UQCRFS1", "RAB7A", "DUSP16", "CAMK2A", "CAMK2B", "CAMK2D", "CAMK2G",
                       "CASP7", "MEGF11", "MEGF10", "HAVCR2", "SCARF1", "ADAM9", "SPHK1", "CH25H", "TIMD4", "MAPKAPK2",
-                      "TGFBRAP1", "CD36", "BCAR1", "ELMO1") 
-                      #The gene list were from KEGG efferocytosis pathway, excluded don't eat me, glucose uptake elements and included elements from efferocytes only
-skin_mtx<-AddModuleScore(skin_mtx,features = list(Efferocytosis_list),name = "Efferocytosis_Score")
+                      "TGFBRAP1", "CD36", "BCAR1", "ELMO1"))
+#The gene list were from KEGG efferocytosis pathway, excluded don't eat me, glucose uptake elements and included elements from efferocytes only
+skin_mtx<-AddModuleScore(skin_mtx,features = Efferocytosis_list,name = "Efferocytosis_Score")
 Idents(skin_mtx)="cluster_celltype"
 FeaturePlot(skin_mtx,features = "Efferocytosis_Score1", label = TRUE)
 VlnPlot(skin_mtx, features = "Efferocytosis_Score1", group.by = "cluster_celltype",pt.size = 0) + 
   geom_boxplot(width = 0.15, position = position_dodge(width = 0.9),outlier.size = 0.6, alpha = 0.7, linewidth = 0.3) +
   geom_hline(yintercept = c(0), linetype = "dashed", color = "red", linewidth = 0.4) +
-  ggtitle("Efferocytosis score")
-#Complex heatmap--------------------------------------------------------------------
-celltype_order <- c("Myeloid-cells","Fibroblasts","Lymphatic-ECs","Vascular-ECs")
-# Average expression per gene x celltype x age
-avg <- AverageExpression(skin_mtx, features = Efferocytosis_list,
-                         group.by = c("cluster_celltype", "age"),
-                         assays = "RNA", slot = "data")$RNA
-missing_genes <- setdiff(Efferocytosis_list, rownames(avg))
-genes_present <- intersect(Efferocytosis_list, rownames(avg))
-# Row z-score
-mat <- t(scale(t(as.matrix(avg))))[genes_present, , drop = FALSE]
-mat <- mat[, colSums(!is.na(mat)) > 0, drop = FALSE]
-# Reorder columns: celltype block, then Y then O within each
-info <- data.frame(col = colnames(mat),
-                   ct = sub("_(YOUNG|OLD)$","",colnames(mat)),
-                   age = sub("^.*_","",colnames(mat))) %>%
-  filter(ct %in% celltype_order) %>%                      # exclude any ct not in your defined order
-  mutate(ct = factor(ct, levels = celltype_order[celltype_order %in% ct]),
-         age = factor(age, levels = c("YOUNG","OLD"))) %>%
-  arrange(ct, age)
-mat <- mat[, info$col, drop = FALSE]
-Heatmap(mat,
-        name = "Gene expression",
-        col = colorRamp2(c(-2,0,2), c("red","white","blue")),
-        cluster_rows = FALSE, cluster_columns = FALSE,
-        column_split = info$ct, column_gap = unit(2,"mm"),
-        column_labels = ifelse(info$age=="YOUNG","Y","O"),
-        column_names_rot = 0, row_names_side = "right",
-        row_names_gp = gpar(fontface = "italic"),
-        rect_gp = gpar(col = "white", lwd = 0.5),
-        heatmap_legend_param = list(direction = "horizontal"))
+  ggtitle("Efferocytosis score") + NoLegend()
+#Sanity check by dotplot----->change the features to the different genes
+DotPlot(skin_mtx, features = c("ACTA2", "RGS5", "PDGFRB","KRT5", "KRT14", "TP63", "ITGB1", "ITGA6","KRT1",
+                               "KRT10", "SBSN", "KRTDAP","PDGFRA", "LUM", "DCN", "COL1A2","AIF1", "LYZ",
+                               "HLA-DRA", "CD68", "ITGAX","CD3D", "CD3G", "CD3E", "LCK","SELE", "CLDN5", "VWF",
+                               "CDH5","PROX1", "LYVE1","HBA1", "HBA2", "HBB","PMEL", "MLANA", "TYRP1", "DCT"), group.by = "cluster_celltype",
+        scale = TRUE, cols = c("lightgrey", "#B2182B")) +
+  RotatedAxis()
+#myeloids subset signature check
+myeloids<-AddModuleScore(myeloids,features = list(Efferocytosis_list),name = "Efferocytosis_Score")
+Idents(myeloids)="singler_type"
+VlnPlot(myeloids, features = "Efferocytosis_Score1", group.by = "singler_type",pt.size = 0) + 
+  geom_boxplot(width = 0.15, position = position_dodge(width = 0.9),outlier.size = 0.6, alpha = 0.7, linewidth = 0.3) +
+  geom_hline(yintercept = c(0), linetype = "dashed", color = "red", linewidth = 0.4) +
+  ggtitle("Efferocytosis score") + NoLegend()
+#UCell module score
+library(UCell)
+skin_mtx<-AddModuleScore_UCell(skin_mtx,features = Efferocytosis_list,name = "_UCell")
+VlnPlot(skin_mtx, features = "signature_1_UCell", group.by = "cluster_celltype",pt.size = 0) + 
+  geom_boxplot(width = 0.15, position = position_dodge(width = 0.9),outlier.size = 0.6, alpha = 0.7, linewidth = 0.3) +
+  geom_hline(yintercept = c(0.038), linetype = "dashed", color = "red", linewidth = 0.4) +
+  ggtitle("Efferocytosis score") + NoLegend()
